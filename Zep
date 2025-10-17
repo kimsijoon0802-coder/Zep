@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPG 배틀로얄 (개인전/총/상점 시뮬레이션)</title>
+    <style>
+        body {
+            font-family: 'Consolas', monospace;
+            background-color: #282c34;
+            color: #abb2bf;
+            margin: 20px;
+        }
+        #game-log {
+            height: 300px;
+            overflow-y: scroll;
+            border: 1px solid #61afef;
+            padding: 10px;
+            margin-bottom: 20px;
+            background-color: #1e2127;
+        }
+        .player-name { font-weight: bold; color: #e5c07b; }
+        .highlight { color: #61afef; font-weight: bold; }
+        .damage { color: #f99157; }
+        .heal { color: #98c379; }
+        .money { color: #ffe066; }
+        .win { color: #56b6c2; font-size: 1.2em; }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .player-card {
+            background-color: #3e4451;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 3px solid #61afef;
+        }
+        .active-player {
+            border: 3px solid #e06c75;
+            box-shadow: 0 0 10px #e06c75;
+        }
+        button {
+            padding: 8px 12px;
+            margin: 5px 5px 5px 0;
+            cursor: pointer;
+            background-color: #5c6370;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #4b525b;
+        }
+        #shop-display {
+            border: 1px solid #e5c07b;
+            padding: 10px;
+            background-color: #2c313a;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🔫 RPG 배틀로얄 개인전 (최후의 1인) ⚔️</h1>
+    <p>개인전 배틀로얄 시뮬레이션: 아이템을 얻고, 총을 구매하여 최후의 1인이 되세요!</p>
+
+    <div id="game-log">게임 시작!</div>
+
+    <div id="current-player-info"></div>
+
+    <div id="shop-display"></div>
+    
+    <h2 id="action-header">행동 선택:</h2>
+    <div id="action-buttons">
+        </div>
+
+    <script>
+        // --- 게임 데이터 ---
+        const PLAYER_COUNT = 6;
+        const INITIAL_HP = 150;
+        const INITIAL_MONEY = 300;
+        const players = {};
+        let activePlayerId = null; // 현재 턴을 가진 플레이어 ID
+        let gameActive = true;
+        let turnCounter = 0;
+
+        const guns = [
+            { id: 'pistol', name: "권총", baseDamage: 15, cost: 0, range: 1, info: "기본 무기" },
+            { id: 'shotgun', name: "펌프 샷건", baseDamage: 45, cost: 150, range: 0.5, info: "근거리 강력" },
+            { id: 'ar', name: "돌격 소총", baseDamage: 30, cost: 250, range: 2, info: "중거리 균형" },
+            { id: 'sniper', name: "저격총", baseDamage: 80, cost: 500, range: 3, info: "장거리 고데미지" }
+        ];
+
+        const items = [
+            { id: 'medkit', name: "구급 상자", effect: { hp: 75 }, cost: 100, info: "체력 대량 회복" },
+            { id: 'shield', name: "미니 보호막", effect: { defense: 5 }, cost: 80, info: "방어력 영구 증가" },
+            { id: 'cash', name: "현금 뭉치", effect: { money: 150 }, cost: 0, info: "탐색으로만 획득" }
+        ];
+
+        // --- 유틸리티 함수 ---
+
+        function logMessage(message) {
+            const log = document.getElementById('game-log');
+            log.innerHTML += `<div>[${turnCounter}턴] ${message}</div>`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function updateStatusDisplay() {
+            let statusHTML = '<h2>플레이어 현황:</h2><div class="status-grid">';
+            Object.values(players).forEach(p => {
+                const activeClass = p.id === activePlayerId ? 'active-player' : '';
+                statusHTML += `
+                    <div class="player-card ${activeClass}">
+                        <span class="player-name">${p.name}</span> (${p.id})
+                        <br>HP: <span class="${p.hp < 50 ? 'damage' : 'heal'}">${p.hp}</span>/${INITIAL_HP} | 
+                        방어력: <span class="highlight">${p.defense}</span>
+                        <br>돈: <span class="money">${p.money} G</span> | 
+                        총: <span class="highlight">${p.gun.name}</span>
+                        <br><span class="${p.isAlive ? 'heal' : 'damage'}">${p.isAlive ? '생존' : '사망'}</span>
+                    </div>
+                `;
+            });
+            statusHTML += '</div>';
+            document.getElementById('current-player-info').innerHTML = statusHTML;
+        }
+
+        function checkWinCondition() {
+            const alivePlayers = Object.values(players).filter(p => p.isAlive);
+            
+            if (alivePlayers.length <= 1) {
+                gameActive = false;
+                const winner = alivePlayers[0];
+                
+                if (winner) {
+                    logMessage(`<div class="win">🏆 ${winner.name} 님이 최후의 승자가 되었습니다! 🏆</div>`);
+                } else {
+                    logMessage(`<div class="win">💀 모든 플레이어가 사망했습니다! (무승부) 💀</div>`);
+                }
+                
+                document.getElementById('shop-display').innerHTML = '';
+                document.getElementById('action-header').style.display = 'none';
+                document.getElementById('action-buttons').innerHTML = '<button onclick="location.reload()">새 게임 시작</button>';
+                return true;
+            }
+            return false;
+        }
+
+        // --- 게임 로직 ---
+
+        function initializeGame() {
+            logMessage("게임을 초기화하고 플레이어를 배치합니다. 최후의 1인을 가리는 개인전입니다.");
+            const playerNames = ["당신", "레이븐", "스톰", "탱크", "바이퍼", "스콜피온"];
+
+            for (let i = 0; i < PLAYER_COUNT; i++) {
+                const playerId = `P${i+1}`;
+                players[playerId] = {
+                    name: playerNames[i],
+                    id: playerId,
+                    hp: INITIAL_HP,
+                    defense: 5 + Math.floor(Math.random() * 3), // 5~7
+                    money: INITIAL_MONEY,
+                    isAlive: true,
+                    gun: guns[0] // 기본 권총 지급
+                };
+            }
+            
+            // P1은 사용자가 조작하는 플레이어
+            activePlayerId = 'P' + PLAYER_COUNT; // P1부터 시작하도록 nextTurn에서 처리
+            
+            nextTurn(); 
+        }
+
+        function startTurn() {
+            if (!gameActive || checkWinCondition()) return;
+            
+            turnCounter++;
+            const playerIds = Object.keys(players);
+            
+            // 다음 생존 플레이어 찾기
+            let index = playerIds.indexOf(activePlayerId);
+            do {
+                index = (index + 1) % PLAYER_COUNT;
+                activePlayerId = playerIds[index];
+            } while (!players[activePlayerId].isAlive);
+
+            const activePlayer = players[activePlayerId];
+
+            logMessage(`--- <span class="player-name">${activePlayer.name}</span> 님의 턴입니다. (돈: <span class="money">${activePlayer.money} G</span>) ---`);
+            
+            updateStatusDisplay();
+            
+            if (activePlayer.id === 'P1') {
+                // 사용자가 조작하는 플레이어
+                showPlayerActions();
+            } else {
+                // AI 플레이어 턴 (자동 진행)
+                setTimeout(aiAction, 1500, activePlayer); // 1.5초 후 AI 행동
+            }
+        }
+
+        function showPlayerActions() {
+            document.getElementById('shop-display').innerHTML = createShopHTML();
+            document.getElementById('action-buttons').innerHTML = `
+                <button onclick="takeAction('shop')">🛒 상점 열기</button>
+                <button onclick="takeAction('search')">🗺️ 탐색 (돈/아이템 획득)</button>
+                <button onclick="showAttackTargets()">🔫 공격 (대상 선택)</button>
+            `;
+        }
+
+        function createShopHTML() {
+            const player = players.P1;
+            let html = '<h3>상점</h3>';
+            html += '<p>가지고 있는 돈: <span class="money">' + player.money + ' G</span></p>';
+            
+            html += '<h4>총기 (현재 총: ' + player.gun.name + ')</h4>';
+            guns.filter(g => g.id !== player.gun.id).forEach(g => {
+                html += `<button onclick="buyItem('${g.id}', 'gun')" ${player.money < g.cost ? 'disabled' : ''}>
+                            ${g.name} (${g.cost} G) - DMG: ${g.baseDamage} | ${g.info}
+                        </button>`;
+            });
+
+            html += '<h4>아이템</h4>';
+            items.filter(i => i.id !== 'cash').forEach(i => {
+                html += `<button onclick="buyItem('${i.id}', 'item')" ${player.money < i.cost ? 'disabled' : ''}>
+                            ${i.name} (${i.cost} G) - ${i.info}
+                        </button>`;
+            });
+            return html;
+        }
+
+        function buyItem(itemId, type) {
+            const player = players.P1;
+            let item = (type === 'gun') ? guns.find(g => g.id === itemId) : items.find(i => i.id === itemId);
+            
+            if (player.money >= item.cost) {
+                player.money -= item.cost;
+                logMessage(`<span class="highlight">${player.name}</span> 님이 <span class="money">${item.cost} G</span>를 사용하여 <span class="heal">${item.name}</span>을(를) 구매했습니다.`);
+                
+                if (type === 'gun') {
+                    player.gun = item;
+                } else if (item.effect.hp) {
+                    const healAmount = item.effect.hp;
+                    player.hp = Math.min(INITIAL_HP, player.hp + healAmount);
+                } else if (item.effect.defense) {
+                    player.defense += item.effect.defense;
+                }
+                
+                updateStatusDisplay();
+                // 상점 닫고 다음 턴으로
+                document.getElementById('shop-display').innerHTML = '';
+                nextTurn();
+
+            } else {
+                logMessage("돈이 부족합니다!");
+            }
+        }
+
+        function takeAction(action, targetId = null) {
+            if (!gameActive) return;
+            const activePlayer = players[activePlayerId];
+            
+            document.getElementById('shop-display').innerHTML = ''; // 상점 닫기
+
+            if (action === 'search') {
+                const roll = Math.random();
+                if (roll < 0.7) { // 70% 확률로 돈 획득
+                    const cashItem = items.find(i => i.id === 'cash');
+                    const moneyGained = cashItem.effect.money;
+                    activePlayer.money += moneyGained;
+                    logMessage(`<span class="player-name">${activePlayer.name}</span> 님이 탐색하여 <span class="money">${moneyGained} G</span>를 발견했습니다.`);
+                } else { // 30% 확률로 아무것도 없음
+                    logMessage(`${activePlayer.name} 님은 아무것도 찾지 못했습니다. 🧭`);
+                }
+            } else if (action === 'attack' && targetId) {
+                attackPlayer(activePlayer.id, targetId);
+            } else if (action === 'shop') {
+                // 상점 액션은 showPlayerActions에서 이미 처리되었음
+                return;
+            }
+
+            nextTurn();
+        }
+
+        function showAttackTargets() {
+            const targetsDiv = document.getElementById('action-buttons');
+            const activePlayer = players[activePlayerId];
+            targetsDiv.innerHTML = '공격 대상 선택: <br>';
+            
+            const enemies = Object.values(players).filter(p => p.isAlive && p.id !== activePlayer.id);
+            
+            if (enemies.length === 0) {
+                targetsDiv.innerHTML += '공격할 대상이 없습니다.';
+                targetsDiv.innerHTML += `<br><button onclick="showPlayerActions()">돌아가기</button>`;
+                return;
+            }
+            
+            enemies.forEach(p => {
+                targetsDiv.innerHTML += `<button onclick="takeAction('attack', '${p.id}')">
+                                            🔫 ${p.name} (HP: ${p.hp})
+                                        </button>`;
+            });
+            targetsDiv.innerHTML += `<br><button onclick="showPlayerActions()">취소</button>`;
+        }
+
+
+        function attackPlayer(attackerId, defenderId) {
+            const attacker = players[attackerId];
+            const defender = players[defenderId];
+            const gun = attacker.gun;
+            
+            if (!defender.isAlive) return;
+
+            // 데미지 계산 (총기 데미지 + 랜덤 - 방어력)
+            const baseDamage = gun.baseDamage;
+            let damageTaken = Math.max(1, Math.floor(baseDamage * (0.8 + Math.random() * 0.4) - defender.defense)); 
+            
+            defender.hp -= damageTaken;
+            
+            logMessage(`<span class="player-name">${attacker.name}</span> 님이 ${gun.name}으로 <span class="player-name">${defender.name}</span> 님을 공격!`);
+            logMessage(`<span class="damage">${defender.name}</span> 님이 ${damageTaken} <span class="damage">데미지</span>를 입었습니다. (현재 HP: ${defender.hp})`);
+            
+            if (defender.hp <= 0) {
+                defender.hp = 0;
+                defender.isAlive = false;
+                logMessage(`<div class="damage">☠️ <span class="player-name">${defender.name}</span> 님이 <span class="highlight">제거</span>되었습니다! ☠️</div>`);
+            }
+
+            updateStatusDisplay();
+        }
+
+        function aiAction(aiPlayer) {
+            if (!aiPlayer.isAlive) {
+                nextTurn();
+                return;
+            }
+            
+            const enemies = Object.values(players).filter(p => p.isAlive && p.id !== aiPlayer.id);
+            
+            // 1. 체력이 낮으면 회복 아이템 구매 시도
+            if (aiPlayer.hp < 75 && aiPlayer.money >= 100) {
+                const medkit = items.find(i => i.id === 'medkit');
+                aiPlayer.money -= medkit.cost;
+                aiPlayer.hp = Math.min(INITIAL_HP, aiPlayer.hp + medkit.effect.hp);
+                logMessage(`<span class="player-name">${aiPlayer.name}</span> (AI) 님이 상점에서 구급 상자를 구매하여 체력을 회복했습니다.`);
+                nextTurn();
+                return;
+            }
+
+            // 2. 돈이 충분하면 더 좋은 총 구매 시도 (현재 총보다 비싼 것)
+            const currentGunIndex = guns.findIndex(g => g.id === aiPlayer.gun.id);
+            const upgradeGun = guns.slice(currentGunIndex + 1).find(g => aiPlayer.money >= g.cost);
+            if (upgradeGun) {
+                aiPlayer.money -= upgradeGun.cost;
+                aiPlayer.gun = upgradeGun;
+                logMessage(`<span class="player-name">${aiPlayer.name}</span> (AI) 님이 <span class="money">${upgradeGun.cost} G</span>를 사용하여 ${upgradeGun.name}으로 <span class="highlight">업그레이드</span>했습니다.`);
+                nextTurn();
+                return;
+            }
+            
+            // 3. 공격할 적이 있다면 공격
+            if (enemies.length > 0) {
+                // 가장 HP가 낮은 적 공격 (우선순위)
+                enemies.sort((a, b) => a.hp - b.hp);
+                const target = enemies[0];
+                attackPlayer(aiPlayer.id, target.id);
+            } 
+            // 4. 적이 없다면 (최후의 1인이 되었다면) 다음 턴으로
+            else {
+                 // 승리 체크
+            }
+            
+            nextTurn();
+        }
+
+
+        function nextTurn() {
+            if (!gameActive) return;
+            // 턴 진행은 startTurn에서 처리
+            setTimeout(startTurn, 100); // 딜레이를 주어 로그 메시지를 순차적으로 볼 수 있게 함
+        }
+
+        // --- 게임 시작 ---
+        initializeGame();
+    </script>
+
+</body>
+</html>
